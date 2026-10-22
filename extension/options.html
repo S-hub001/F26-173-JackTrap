@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>JackTrap — Settings</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 560px; margin: 30px auto; color: #1a1a1a; }
+    h1 { font-size: 18px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-top: 16px; }
+    input { width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box; font-family: monospace; }
+    button { margin-top: 14px; padding: 8px 16px; background: #1565C0; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    p.note { font-size: 12px; color: #666; line-height: 1.5; }
+    .status { font-size: 12px; margin-top: 8px; color: #2E7D32; }
+    ul { font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>JackTrap — Settings</h1>
+
+  <p class="note">
+    This extension detects cryptojacking-style behavior using signals a browser can actually
+    observe: network requests per site, WebAssembly/Worker/WebSocket usage, main-thread
+    blocking (long tasks), JS heap growth, and whole-machine CPU/memory usage (popup and
+    dashboard). All of that works in a completely normal install of Chrome — stable channel,
+    no flags, no developer build required.
+  </p>
+  <p class="note">
+    What it still can't do: read OS-level processes, get <em>per-tab or per-process</em>
+    CPU/RAM, or hash a running executable. That's not a "use a different Chrome channel"
+    problem — the API that exposes per-process detail (<code>chrome.processes</code>) is
+    restricted by Chrome to extensions that are force-installed by enterprise policy, on
+    every channel including stable. A normal unpacked or Web Store install can't get it
+    regardless. It would take a separate native application (Native Messaging) talking to
+    the OS to go further than that.
+  </p>
+
+  <label for="apiKey">VirusTotal API key (stored locally, not synced)</label>
+  <input type="text" id="apiKey" placeholder="Paste your VirusTotal API key" />
+  <button id="save">Save</button>
+  <div class="status" id="status"></div>
+
+  <ul>
+    <li>Free-tier VirusTotal keys are limited to ~4 requests/minute — the extension paces lookups automatically and caches results for an hour.</li>
+    <li>Get a key at virustotal.com under your profile → API key.</li>
+    <li>Because this key was shared in a chat conversation during setup, consider rotating it in your VirusTotal account settings.</li>
+  </ul>
+
+  <script src="options.js"></script>
+</body>
+</html>
