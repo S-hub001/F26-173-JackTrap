@@ -23,7 +23,8 @@ const TYPE_LABELS = {
   suspicious_connection: "Connection",
   score_threshold: "Score",
   vt_scan: "VirusTotal",
-  system_cpu_high: "System"
+  system_cpu_high: "System",
+  static_scan: "Static scan"
 };
 
 // ---------- System resources (live-sampled while this tab is open) ----------
@@ -155,11 +156,17 @@ async function withButtonFeedback(btn, fn) {
 }
 
 // ---------- Tracked tabs ----------
+function l1Chip(l1) {
+  if (!l1 || l1.disabled || !l1.scannedAt) return '<span class="l1-chip none">—</span>';
+  const label = l1.level === "strong" ? "Strong signs" : l1.level === "possible" ? "Possible" : "Clear";
+  return `<span class="l1-chip ${l1.level}">${label}</span>`;
+}
+
 function renderTabs(states) {
   lastStates = states || [];
   const body = document.getElementById("tabsBody");
   if (!lastStates.length) {
-    body.innerHTML = '<tr><td colspan="8" class="empty">No tabs tracked yet — browse to a site to start collecting signals.</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" class="empty">No tabs tracked yet — browse to a site to start collecting signals.</td></tr>';
     return;
   }
   const sorted = lastStates.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -177,6 +184,7 @@ function renderTabs(states) {
         <td>${t.wasmInstantiations || 0}</td>
         <td>${t.workersCreated || 0}</td>
         <td>${susWs}</td>
+        <td>${l1Chip(s.layer1)}</td>
         <td>${Math.round(t.longTaskTotalMs || 0)}</td>
         <td>${(s.suspiciousConnections || []).length}</td>
         <td class="muted" title="${fullTime(s.lastUpdated)}">${timeAgo(s.lastUpdated)}</td>

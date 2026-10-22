@@ -7,6 +7,10 @@
 // JS heap growth). That's the ceiling of what's possible without a native
 // helper app talking to the OS.
 
+/* global SIGNATURES, SETTINGS_KEY, loadSettings, activeSignatures, scanSources, mergeHitMaps,
+   summarize, emptyLayer1, isFetchableUrl, isThirdParty, LAYER1_LIMITS */
+importScripts("signatures.js", "layer1.js", "settings.js");
+
 const SUSPICIOUS_PORTS = new Set([
   3333, 3357, 4444, 4028, 5555, 5730, 7777, 8080, 8118, 8888,
   9999, 14444, 14433, 45560, 45700
@@ -86,6 +90,7 @@ function freshState(tabId) {
     },
     score: 0,
     vt: { checked: false, malicious: 0, suspicious: 0, lastCheckedAt: null, flaggedIndicators: [] },
+    layer1: emptyLayer1(),     // static JavaScript scan (see layer1.js)
     lastLoggedTier: "none",
     lastUpdated: Date.now()
   };
@@ -143,6 +148,10 @@ function computeScore(state) {
     if (state.vt.malicious > 0) score += 70;
     else if (state.vt.suspicious > 0) score += 25;
   }
+
+  // Layer 1: static scan of the page's scripts. How points are earned is
+  // explained in layer1.js (layer1Points).
+  if (state.layer1) score += state.layer1.points || 0;
 
   state.score = Math.max(0, Math.min(100, Math.round(score)));
   return state.score;
@@ -241,6 +250,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     updateBadge(sender.tab.id, state);
     sendResponse({ ok: true });
     return true;
+  }
+
+  // Layer 1: scripts sent by layer1_scan.js after the page loads
+  if (msg.type === "LAYER1_PAGE_DATA" && sender.tab) {
+    handleLayer1Data(sender.tab.id, msg, false).then(() => sendResponse({ ok: true }));
+    return true; // async
+  }
+
+  // Layer 1: "Scan this page now" button in the popup
+  if (msg.type === "LAYER1_SCAN_NOW") {
+    scanTabNow(msg.tabId).then(sendResponse);
+    return true; // async
   }
 
   if (msg.type === "GET_STATE") {
@@ -462,6 +483,171 @@ async function getAllVtResults() {
   }
 }
 
+// ---------- Layer 1: static JavaScript scanner ----------
+// The page sends us the text of its inline <script> tags and the addresses of
+// its external script files (layer1_scan.js).
+//   Step 1, always (tiny): scan the inline code and the file addresses.
+//   Step 2, only when the machine is busy or the user presses "Scan this page
+//           now": download the external script files and scan their text too.
+// That keeps the layer light, as the supervisor asked: cheap checks first,
+// heavier ones only when something looks busy.
+
+function hostOfUrl(url) {
+  try { return new URL(url).hostname; } catch (e) { return ""; }
+}
+
+async function ensureTabIdentity(state, tabId) {
+  if (state.hostname) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    state.hostname = hostOfUrl(tab.url);
+    state.url = tab.url;
+  } catch (e) {}
+}
+
+// Downloads at most maxBytes of a script file. Cookies are not sent, and the
+// browser cache is preferred (the page already downloaded this file).
+async function fetchTextCapped(url, maxBytes, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, credentials: "omit", cache: "force-cache" });
+    if (!res.ok || !res.body) return null;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8", { fatal: false });
+    let received = 0;
+    let text = "";
+    while (received < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.length;
+      text += decoder.decode(value, { stream: true });
+    }
+    ctrl.abort(); // stop downloading the rest
+    return text;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runDeepScan(state, signatures) {
+  const l1 = state.layer1;
+  const pageHost = state.hostname || "";
+  const room = LAYER1_LIMITS.maxExternalPerPage - (l1.externalDone + l1.externalFailed);
+  if (room <= 0 || !l1.externalQueue.length) return;
+
+  // Third-party scripts first: that is where miners usually come from.
+  const batch = l1.externalQueue
+    .slice()
+    .sort((a, b) => Number(isThirdParty(b, pageHost)) - Number(isThirdParty(a, pageHost)))
+    .slice(0, Math.min(LAYER1_LIMITS.maxExternalFiles, room));
+  l1.externalQueue = l1.externalQueue.filter((u) => !batch.includes(u));
+
+  for (let i = 0; i < batch.length; i += 4) {
+    const chunk = batch.slice(i, i + 4);
+    const texts = await Promise.all(
+      chunk.map((u) => fetchTextCapped(u, LAYER1_LIMITS.maxExternalBytes, LAYER1_LIMITS.fetchTimeoutMs))
+    );
+    const sources = [];
+    texts.forEach((text, j) => {
+      if (text == null) l1.externalFailed++;
+      else {
+        l1.externalDone++;
+        sources.push({ label: chunk[j], kind: "external", text });
+      }
+    });
+    mergeHitMaps(l1.hitMap, scanSources(sources, signatures));
+  }
+}
+
+function finishLayer1(tabId, state) {
+  const l1 = state.layer1;
+  Object.assign(l1, summarize(l1.hitMap));
+  l1.externalTotal = Object.keys(l1.urlsSeen).length;
+  computeScore(state);
+
+  if (l1.level !== l1.lastLoggedLevel && (l1.level === "strong" || l1.level === "possible")) {
+    const names = l1.hits.filter((h) => h.weight >= 2).slice(0, 4).map((h) => h.keyword).join(", ");
+    addLogEntry({
+      tabId,
+      hostname: state.hostname,
+      type: "static_scan",
+      severity: "elevated",
+      detail: `Static scan found ${l1.level === "strong" ? "strong" : "possible"} miner signs in page scripts (${names})`
+    });
+  }
+  l1.lastLoggedLevel = l1.level;
+  maybeLogScoreTier(state);
+  updateBadge(tabId, state);
+}
+
+async function handleLayer1Data(tabId, msg, manual) {
+  const state = getState(tabId);
+  await ensureTabIdentity(state, tabId);
+  const settings = await loadSettings();
+
+  if (!settings.layer1Enabled) {
+    state.layer1 = Object.assign(emptyLayer1(), { disabled: true });
+    computeScore(state);
+    updateBadge(tabId, state);
+    return state.layer1;
+  }
+  if (!state.layer1 || state.layer1.disabled) state.layer1 = emptyLayer1();
+  const l1 = state.layer1;
+  const signatures = activeSignatures(SIGNATURES, settings);
+
+  const sources = [];
+  (msg.inline || []).forEach((text) => {
+    l1.inlineScanned++;
+    sources.push({ label: `inline script ${l1.inlineScanned}`, kind: "inline", text });
+  });
+  (msg.urls || []).forEach((url) => {
+    sources.push({ label: url, kind: "url", text: url }); // file names count too
+    if (isFetchableUrl(url) && !l1.urlsSeen[url] && Object.keys(l1.urlsSeen).length < LAYER1_LIMITS.maxUrlsTracked) {
+      l1.urlsSeen[url] = 1;
+      l1.externalQueue.push(url);
+    }
+  });
+  mergeHitMaps(l1.hitMap, scanSources(sources, signatures));
+  l1.scannedAt = Date.now();
+
+  const cpu = systemUsage.cpuPercent;
+  const busy = settings.deepScanCpu === 0 || (cpu != null && cpu >= settings.deepScanCpu);
+  if (settings.fetchExternal && (manual || busy)) {
+    await runDeepScan(state, signatures);
+  }
+  finishLayer1(tabId, state);
+  return l1;
+}
+
+// Popup button: ask the page for a fresh read, then scan everything,
+// including external files, whatever the CPU is doing.
+async function scanTabNow(tabId) {
+  try {
+    const data = await chrome.tabs.sendMessage(tabId, { type: "LAYER1_COLLECT" });
+    const state = getState(tabId);
+    state.layer1 = emptyLayer1();
+    await handleLayer1Data(tabId, { inline: data.inline, urls: data.urls }, true);
+    return { ok: true, layer1: state.layer1 };
+  } catch (e) {
+    return { ok: false, error: "no_content_script" };
+  }
+}
+
+// When the periodic CPU check finds the machine busy, read the external
+// scripts of the tab the user is looking at (if they were skipped earlier).
+async function maybeDeepScanActiveTab(settings, cpu) {
+  if (!settings.layer1Enabled || !settings.fetchExternal) return;
+  if (!(settings.deepScanCpu === 0 || cpu >= settings.deepScanCpu)) return;
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const state = tab && tabStates.get(tab.id);
+  if (!state || !state.layer1 || !state.layer1.externalQueue.length) return;
+  await runDeepScan(state, activeSignatures(SIGNATURES, settings));
+  finishLayer1(tab.id, state);
+}
+
 // ---------- System-wide CPU & memory (chrome.system.cpu / chrome.system.memory) ----------
 // These work on any normal install of Chrome (stable channel, no flags, no
 // Canary needed) — that part isn't restricted. What IS restricted, on every
@@ -472,28 +658,34 @@ async function getAllVtResults() {
 // useful as a correlation signal (does a spike here line up with a spike
 // in one tab's WASM/Worker/long-task numbers?), not as attribution on its
 // own.
-let lastCpuSample = null; // { processors: [{user,kernel,idle,total}] }
 let systemUsage = { cpuPercent: null, memUsedBytes: null, memTotalBytes: null, ts: null };
 const SYSTEM_CPU_LOG_THRESHOLD = 85; // percent
 let systemCpuWasHigh = false;
+const SAMPLE_ALARM = "jacktrap_system_sample";
+
+async function snapshotCpu() {
+  const info = await chrome.system.cpu.getInfo();
+  return info.processors.map((p) => ({ idle: p.usage.idle, total: p.usage.total }));
+}
+
+// Two snapshots one second apart. Taking both inside one call means the
+// reading still works after the service worker went to sleep between checks.
+async function readSystemCpuPercent() {
+  const a = await snapshotCpu();
+  await new Promise((r) => setTimeout(r, 1000));
+  const b = await snapshotCpu();
+  let used = 0, total = 0;
+  b.forEach((p, i) => {
+    const dTotal = p.total - a[i].total;
+    const dIdle = p.idle - a[i].idle;
+    if (dTotal > 0) { used += dTotal - dIdle; total += dTotal; }
+  });
+  return total > 0 ? Math.round((used / total) * 100) : null;
+}
 
 async function sampleSystem() {
   try {
-    if (chrome.system?.cpu) {
-      const cpuInfo = await chrome.system.cpu.getInfo();
-      const processors = cpuInfo.processors.map(p => ({ ...p.usage }));
-      if (lastCpuSample && lastCpuSample.length === processors.length) {
-        let usedDelta = 0, totalDelta = 0;
-        processors.forEach((p, i) => {
-          const prev = lastCpuSample[i];
-          const dTotal = p.total - prev.total;
-          const dIdle = p.idle - prev.idle;
-          if (dTotal > 0) { usedDelta += (dTotal - dIdle); totalDelta += dTotal; }
-        });
-        systemUsage.cpuPercent = totalDelta > 0 ? Math.round((usedDelta / totalDelta) * 100) : null;
-      }
-      lastCpuSample = processors;
-    }
+    if (chrome.system?.cpu) systemUsage.cpuPercent = await readSystemCpuPercent();
     if (chrome.system?.memory) {
       const memInfo = await chrome.system.memory.getInfo();
       systemUsage.memTotalBytes = memInfo.capacity;
@@ -519,24 +711,40 @@ async function sampleSystem() {
         });
       }
       systemCpuWasHigh = high;
+
+      // Layer 1, step 2: the machine is busy, so read external scripts too.
+      await maybeDeepScanActiveTab(await loadSettings(), systemUsage.cpuPercent);
     }
   } catch (e) {
     // system.cpu / system.memory can be missing on some platforms; fail quiet
   }
 }
 
-chrome.alarms.create("jacktrap_system_sample", { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "jacktrap_system_sample") sampleSystem();
-});
-sampleSystem(); // seed a first reading on worker startup
-
-chrome.runtime.onInstalled.addListener(async () => {
-  const { vtApiKey } = await chrome.storage.local.get("vtApiKey");
-  if (!vtApiKey) {
-    // Pre-filled from setup; user can change it anytime on the options page.
-    await chrome.storage.local.set({
-      vtApiKey: "9b85d05d7273e0adb407469fa5cee38199bf404518f45299d66b991210f42bf8"
-    });
+// Create the alarm only when it is missing or its period changed. (Calling
+// create() on every worker start would keep resetting the timer.)
+async function applySampleAlarm() {
+  const { sampleMinutes } = await loadSettings();
+  const existing = await chrome.alarms.get(SAMPLE_ALARM);
+  if (!existing || existing.periodInMinutes !== sampleMinutes) {
+    await chrome.alarms.create(SAMPLE_ALARM, { periodInMinutes: sampleMinutes });
   }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === SAMPLE_ALARM) sampleSystem();
 });
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes[SETTINGS_KEY]) return;
+  const before = (changes[SETTINGS_KEY].oldValue || {}).sampleMinutes;
+  const after = (changes[SETTINGS_KEY].newValue || {}).sampleMinutes;
+  if (before !== after) applySampleAlarm();
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  // The VirusTotal key is set on the settings page. It is never stored in code.
+  applySampleAlarm();
+});
+
+applySampleAlarm();
+sampleSystem(); // seed a first reading on worker startup

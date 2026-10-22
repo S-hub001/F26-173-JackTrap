@@ -1,159 +1,381 @@
-function scoreColor(score) {
-  if (score >= 60) return "#D32F2F";
-  if (score >= 30) return "#F9A825";
-  return "#4CAF50";
+// JackTrap popup.
+// Everything shown goes through textContent (never innerHTML): script names,
+// host names and code snippets come from untrusted websites.
+
+const $ = (id) => document.getElementById(id);
+
+function h(tag, props, ...kids) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (value == null || value === false) continue;
+    if (key === "class") node.className = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? "" : value);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    node.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return node;
 }
 
-function fmtBytes(n) {
-  if (!n) return "0";
-  const mb = n / (1024 * 1024);
-  return mb.toFixed(1) + " MB";
+// ---------- state ----------
+let tabId = null;
+let latest = { state: null, cpu: null, memUsed: null, memTotal: null };
+let vtRows = [];
+let notice = null; // { text, settings }
+const busy = { scan: false, vt: false };
+const open = new Set();
+let autoOpened = false;
+let lastKey = "";
+
+// ---------- helpers ----------
+function tierOf(state) {
+  if (!state) return "none";
+  const s = state.score || 0;
+  return s >= 60 ? "high" : s >= 30 ? "elevated" : "low";
 }
 
-// Live-sampled while the popup is open (fresher than waiting on the
-// background worker's 1-minute alarm). Needs two chrome.system.cpu.getInfo()
-// readings to compute a percent, so the first refresh after opening shows
-// "—" and fills in on the next tick.
-let lastPopupCpuSample = null;
+const TIER_WORD = { none: "Not scanned", low: "Low risk", elevated: "Worth a look", high: "High risk" };
 
-async function sampleSystemCpuPercent() {
+function fmtGB(n) {
+  return n ? (n / (1024 * 1024 * 1024)).toFixed(1) + " GB" : "0 GB";
+}
+
+function strengthWord(weight) {
+  return weight >= 4 ? "Strong" : weight >= 2 ? "Possible" : "Weak";
+}
+
+function shortLabel(label) {
+  const text = String(label || "");
+  return text.length > 70 ? text.slice(0, 67) + "…" : text;
+}
+
+// One plain sentence: the biggest reason behind the score.
+function explain(state) {
+  if (!state) return "JackTrap has no data for this page yet. Reload it, or open a normal website.";
+  const l1 = state.layer1 || {};
+  const t = state.telemetry || {};
+  const sus = state.suspiciousConnections || [];
+  if (state.vt && state.vt.malicious > 0) return "VirusTotal flags a site this page contacts as malicious.";
+  if (l1.level === "strong") {
+    const names = (l1.hits || []).filter((x) => x.weight >= 4).slice(0, 3).map((x) => x.keyword).join(", ");
+    return "The static scan found miner signatures in the page scripts: " + names + ".";
+  }
+  if (sus.length) return "This page connects to " + sus[0].host + ":" + sus[0].port + ", which looks like a mining pool.";
+  if ((t.suspiciousWorkerNames || []).length) return "A background worker has a mining-style name.";
+  if ((t.websockets || []).some((w) => w.suspicious)) return "A WebSocket goes to a mining-style address.";
+  if (l1.level === "possible") return "Some scripts mention mining terms. Honest code does too, so check the details.";
+  if ((state.score || 0) >= 30) return "Heavy scripting (WebAssembly, workers or long tasks). Normal for some apps.";
+  if ((state.score || 0) > 0) return "A little scripting activity, nothing that looks like mining.";
+  return "No miner signatures, odd connections or heavy scripting seen.";
+}
+
+// ---------- layers ----------
+function kv(label, value) {
+  return h("div", { class: "kv" }, h("span", null, label), h("span", null, value));
+}
+
+function layerCpu() {
+  const cpu = latest.cpu;
+  let status = "idle", chip = "Reading…", summary = "Waiting for a second reading";
+  if (cpu != null) {
+    status = cpu >= 90 ? "alert" : cpu >= 30 ? "watch" : "ok";
+    chip = cpu >= 90 ? "Very busy" : cpu >= 30 ? "Busy" : "Normal";
+    summary = cpu + "% of the whole machine";
+  }
+  const body = h("div", null,
+    kv("CPU now", cpu == null ? "…" : cpu + "%"),
+    kv("Memory used", fmtGB(latest.memUsed) + " / " + fmtGB(latest.memTotal)),
+    h("p", { class: "muted" }, "Chrome can’t show CPU for a single tab, so this is a machine-wide hint. High CPU alone is not a verdict: video and games use a lot too.")
+  );
+  return { id: "cpu", title: "Layer 0 · System CPU", status, chip, summary, body };
+}
+
+function layerStatic(state) {
+  const l1 = state && state.layer1;
+  const title = "Layer 1 · Static scan";
+  if (l1 && l1.disabled) {
+    return { id: "static", title, status: "idle", chip: "Off", summary: "Turned off in settings",
+      body: h("p", { class: "muted" }, "Turn the static scanner back on in settings.") };
+  }
+  if (!l1 || !l1.scannedAt) {
+    return { id: "static", title, status: "idle", chip: "Waiting", summary: "Waiting for the page scripts",
+      body: h("p", { class: "muted" }, "JackTrap reads a page’s scripts after it finishes loading. If this stays empty, reload the page once.") };
+  }
+
+  const pending = (l1.externalQueue || []).length;
+  const read = (l1.externalDone || 0) + (l1.externalFailed || 0);
+  const names = (l1.hits || []).filter((x) => x.weight >= 2).slice(0, 2).map((x) => x.keyword);
+  const more = (l1.hits || []).filter((x) => x.weight >= 2).length - names.length;
+
+  let status = "ok", chip = "Clear", summary = "No miner words in " + (l1.inlineScanned || 0) + " inline scripts";
+  if (l1.level === "strong") { status = "alert"; chip = "Strong signs"; }
+  else if (l1.level === "possible") { status = "watch"; chip = "Possible signs"; }
+  if (names.length) summary = names.join(", ") + (more > 0 ? " +" + more + " more" : "");
+
+  const body = h("div", null,
+    kv("Inline scripts read", l1.inlineScanned || 0),
+    kv("Script files read", read + " of " + (l1.externalTotal || 0)),
+    pending > 0
+      ? h("p", { class: "muted" }, pending + " script file" + (pending === 1 ? "" : "s") + " not read yet, because the CPU is calm. Press “Scan this page now” to read them.")
+      : null
+  );
+
+  const hits = l1.hits || [];
+  if (!hits.length) {
+    body.append(h("p", { class: "muted" }, "None of the signature words were found."));
+  }
+  for (const hit of hits) {
+    const counted = hit.weight >= 2 || l1.level !== "clean";
+    const word = strengthWord(hit.weight);
+    const where = (hit.where || []).map((w) => (w.kind === "inline" ? w.label : shortLabel(w.label)));
+    body.append(h("div", { class: "hit" + (counted ? "" : " dim") },
+      h("div", { class: "hit-head" },
+        h("span", { class: "kw" }, hit.keyword),
+        h("span", { class: "chip " + (hit.weight >= 4 ? "alert" : hit.weight >= 2 ? "watch" : "idle") },
+          counted ? word : word + ", not counted alone")),
+      h("div", { class: "hit-where" }, "Found in " + where.join("; ")),
+      hit.where && hit.where[0] && hit.where[0].snippet ? h("div", { class: "snippet" }, hit.where[0].snippet) : null
+    ));
+  }
+  body.append(h("p", { class: "muted", style: "margin-top:8px" },
+    "Matching words is a hint, not proof. Obfuscated code can hide them."));
+  return { id: "static", title, status, chip, summary, body };
+}
+
+function layerBehavior(state) {
+  const t = (state && state.telemetry) || {};
+  const susW = (t.suspiciousWorkerNames || []).length;
+  const susWs = (t.websockets || []).filter((w) => w.suspicious).length;
+  const wasm = t.wasmInstantiations || 0;
+  const workers = t.workersCreated || 0;
+  const longMs = Math.round(t.longTaskTotalMs || 0);
+  let status = "ok", chip = "Calm";
+  if (!state) { status = "idle"; chip = "No data"; }
+  else if (susW || susWs) { status = "alert"; chip = "Suspicious"; }
+  else if (wasm > 0 || workers > 2 || longMs > 3000) { status = "watch"; chip = "Busy"; }
+  const body = h("div", null,
+    kv("WebAssembly starts", wasm),
+    kv("Workers created", workers),
+    kv("Suspicious workers", susW),
+    kv("Suspicious WebSockets", susWs),
+    kv("Main thread blocked", longMs + " ms")
+  );
+  return { id: "behavior", title: "Page behavior", status, chip,
+    summary: "WASM " + wasm + " · workers " + workers + " · blocked " + longMs + " ms", body };
+}
+
+function layerNetwork(state) {
+  const hosts = Object.entries((state && state.requestsByHost) || {});
+  const sus = (state && state.suspiciousConnections) || [];
+  let status = "ok", chip = "Clear";
+  if (!state || !hosts.length) { status = "idle"; chip = "No data"; }
+  else if (sus.length) { status = "alert"; chip = "Flagged"; }
+  const body = h("div", null);
+  for (const c of sus) {
+    body.append(h("div", { class: "hostrow flagrow" }, h("span", null, c.host + ":" + c.port), h("span", null, c.reason)));
+  }
+  hosts.sort((a, b) => b[1].count - a[1].count).slice(0, 8).forEach(([host, rec]) => {
+    body.append(h("div", { class: "hostrow" }, h("span", null, host), h("span", null, rec.count + " req")));
+  });
+  if (!hosts.length) body.append(h("p", { class: "muted" }, "No requests captured yet."));
+  return { id: "network", title: "Network", status, chip,
+    summary: hosts.length + " hosts · " + sus.length + " flagged", body };
+}
+
+function layerVt(state) {
+  const vt = state && state.vt;
+  let status = "idle", chip = "Not checked", summary = "Press “Check with VirusTotal”";
+  if (vt && vt.checked) {
+    if (vt.malicious > 0) { status = "alert"; chip = "Malicious"; summary = vt.malicious + " indicator(s) flagged"; }
+    else if (vt.suspicious > 0) { status = "watch"; chip = "Suspicious"; summary = vt.suspicious + " indicator(s) look odd"; }
+    else { status = "ok"; chip = "Clear"; summary = "Nothing flagged"; }
+  }
+  const body = h("div", null);
+  for (const r of vtRows) {
+    if (r.notFound) { body.append(h("div", { class: "hostrow" }, h("span", null, r.indicator), h("span", null, "not in VirusTotal"))); continue; }
+    const s = r.stats || {};
+    const flagged = (s.malicious || 0) > 0 || (s.suspicious || 0) > 0;
+    body.append(h("div", { class: "hostrow" + (flagged ? " flagrow" : "") },
+      h("span", null, r.indicator),
+      h("span", null, (s.malicious || 0) + " malicious · " + (s.suspicious || 0) + " suspicious")));
+  }
+  if (!vtRows.length) body.append(h("p", { class: "muted" }, "Checks this page’s host and the hosts it connects to. Free keys allow about 4 lookups a minute, so it can take a while."));
+  return { id: "vt", title: "VirusTotal", status, chip, summary, body };
+}
+
+// ---------- render ----------
+function render() {
+  const key = JSON.stringify([latest, vtRows, notice, busy, [...open]]);
+  if (key === lastKey) return;
+  lastKey = key;
+
+  const state = latest.state;
+  const tier = tierOf(state);
+
+  $("pageHost").textContent = (state && state.hostname) || "No page data";
+  $("verdict").dataset.tier = tier;
+  $("verdictWord").textContent = TIER_WORD[tier];
+  $("scoreText").textContent = state ? (state.score || 0) + " / 100" : "";
+  $("verdictWhy").textContent = explain(state);
+  $("marker").style.left = (state ? Math.min(99, Math.max(1, state.score || 0)) : 0) + "%";
+  $("marker").style.display = state ? "block" : "none";
+  $("zonebar").setAttribute("aria-label", state ? "Suspicion score " + (state.score || 0) + " out of 100" : "Not scanned");
+
+  const box = $("notice");
+  box.replaceChildren();
+  box.hidden = !notice;
+  if (notice) {
+    box.append(h("p", null, notice.text));
+    if (notice.settings) box.append(h("button", { class: "btn", onclick: () => chrome.runtime.openOptionsPage() }, "Open settings"));
+  }
+
+  const layers = [layerCpu(), layerStatic(state), layerBehavior(state), layerNetwork(state), layerVt(state)];
+  if (!autoOpened && state) {
+    const firstAlert = layers.find((l) => l.status === "alert");
+    if (firstAlert) open.add(firstAlert.id); // open only the first flagged layer
+    autoOpened = true;
+  }
+  $("layers").replaceChildren(...layers.map((layer) => {
+    const isOpen = open.has(layer.id);
+    const bodyId = "layer-body-" + layer.id;
+    const toggle = () => { if (open.has(layer.id)) open.delete(layer.id); else open.add(layer.id); render(); };
+    // The whole row is clickable; the button inside is what keyboards and screen readers use.
+    const head = h("div", { class: "layer-head" + (isOpen ? " open" : ""), onclick: toggle },
+      h("button", {
+        class: "layer-toggle", "aria-expanded": String(isOpen), "aria-controls": bodyId,
+        onclick: (e) => { e.stopPropagation(); toggle(); }
+      },
+        h("span", { class: "layer-title" }, layer.title),
+        h("span", { class: "layer-sum" }, layer.summary)),
+      h("span", { class: "chip " + layer.status }, layer.chip),
+      h("span", { class: "caret", "aria-hidden": "true" })
+    );
+    const body = h("div", { class: "layer-body", id: bodyId, hidden: !isOpen }, layer.body);
+    return h("li", { class: "layer", "data-status": layer.status }, h("span", { class: "node", "aria-hidden": "true" }), head, body);
+  }));
+
+  $("scanBtn").disabled = busy.scan || tabId == null;
+  $("scanBtn").textContent = busy.scan ? "Scanning…" : "Scan this page now";
+  $("vtBtn").disabled = busy.vt || tabId == null;
+  $("vtBtn").textContent = busy.vt ? "Checking (takes a while)…" : "Check with VirusTotal";
+}
+
+// ---------- data ----------
+let lastCpuSample = null;
+
+// Needs two readings to get a percent, so the first tick shows "Reading…".
+async function sampleCpuPercent() {
   try {
     const info = await chrome.system.cpu.getInfo();
-    const processors = info.processors.map(p => ({ ...p.usage }));
+    const procs = info.processors.map((p) => ({ idle: p.usage.idle, total: p.usage.total }));
     let percent = null;
-    if (lastPopupCpuSample && lastPopupCpuSample.length === processors.length) {
+    if (lastCpuSample && lastCpuSample.length === procs.length) {
       let used = 0, total = 0;
-      processors.forEach((p, i) => {
-        const prev = lastPopupCpuSample[i];
-        const dTotal = p.total - prev.total;
-        const dIdle = p.idle - prev.idle;
-        if (dTotal > 0) { used += (dTotal - dIdle); total += dTotal; }
+      procs.forEach((p, i) => {
+        const dTotal = p.total - lastCpuSample[i].total;
+        const dIdle = p.idle - lastCpuSample[i].idle;
+        if (dTotal > 0) { used += dTotal - dIdle; total += dTotal; }
       });
       percent = total > 0 ? Math.round((used / total) * 100) : null;
     }
-    lastPopupCpuSample = processors;
+    lastCpuSample = procs;
     return percent;
   } catch (e) {
     return null;
   }
 }
 
-async function refreshSystemUsage() {
-  const cpuEl = document.getElementById("sysCpu");
-  const percent = await sampleSystemCpuPercent();
-  cpuEl.textContent = percent == null ? "—" : `${percent}%`;
-  cpuEl.style.color = percent == null ? "" : scoreColor(percent >= 60 ? 60 : percent >= 30 ? 30 : 0);
-
-  const memEl = document.getElementById("sysMem");
+async function refreshSystem() {
+  latest.cpu = await sampleCpuPercent();
   try {
-    const memInfo = await chrome.system.memory.getInfo();
-    const used = memInfo.capacity - memInfo.availableCapacity;
-    memEl.textContent = `${fmtBytes(used)} / ${fmtBytes(memInfo.capacity)}`;
+    const mem = await chrome.system.memory.getInfo();
+    latest.memTotal = mem.capacity;
+    latest.memUsed = mem.capacity - mem.availableCapacity;
+  } catch (e) {}
+  render();
+}
+
+async function refreshState() {
+  if (tabId == null) return;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "GET_STATE", tabId });
+    latest.state = (resp && resp.state) || null;
   } catch (e) {
-    memEl.textContent = "—";
+    latest.state = null;
   }
+  render();
 }
 
-async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab;
-}
-
-function renderState(state) {
-  document.getElementById("pageHost").textContent = state?.hostname || "(no data yet — reload the page)";
-  const score = state?.score || 0;
-  const badge = document.getElementById("scoreBadge");
-  badge.textContent = score;
-  badge.style.background = scoreColor(score);
-
-  const t = state?.telemetry || {};
-  document.getElementById("wasmCount").textContent = t.wasmInstantiations || 0;
-  document.getElementById("workerCount").textContent = t.workersCreated || 0;
-  document.getElementById("susWorkers").textContent = (t.suspiciousWorkerNames || []).length;
-  document.getElementById("susWs").textContent = (t.websockets || []).filter(w => w.suspicious).length;
-  document.getElementById("longTasks").textContent = Math.round(t.longTaskTotalMs || 0);
-
-  const hostList = document.getElementById("hostList");
-  const hosts = Object.entries(state?.requestsByHost || {});
-  if (hosts.length === 0) {
-    hostList.innerHTML = '<div class="empty">No requests captured yet.</div>';
-  } else {
-    hostList.innerHTML = hosts
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 25)
-      .map(([host, rec]) => `
-        <div class="host-item">
-          <span>${host}</span>
-          <span class="muted">${rec.count} req · ports ${rec.ports.join(",")}</span>
-        </div>`)
-      .join("");
-  }
-
-  const susList = document.getElementById("suspiciousList");
-  const sus = state?.suspiciousConnections || [];
-  susList.innerHTML = sus.length
-    ? sus.map(c => `<div class="row"><span class="flag">${c.host}:${c.port}</span><span class="muted">${c.reason}</span></div>`).join("")
-    : '<div class="empty">None detected.</div>';
-}
-
-async function refresh() {
-  const tab = await getActiveTab();
-  if (!tab) return;
-  chrome.runtime.sendMessage({ type: "GET_STATE", tabId: tab.id }, (resp) => {
-    renderState(resp?.state);
+function relevantIndicators(state) {
+  const set = new Set();
+  if (!state) return set;
+  if (state.hostname) set.add(state.hostname);
+  Object.entries(state.requestsByHost || {}).forEach(([host, rec]) => {
+    set.add(host);
+    (rec.ips || []).forEach((ip) => set.add(ip));
   });
-  return tab;
+  return set;
 }
 
-function renderVtStats(stats) {
-  if (!stats) return "";
-  const mal = stats.malicious || 0, sus = stats.suspicious || 0, harmless = stats.harmless || 0, undet = stats.undetected || 0;
-  const cls = mal > 0 ? "flag" : (sus > 0 ? "flag" : "");
-  return `<span class="${cls}">malicious: ${mal}</span><span>suspicious: ${sus}</span><span>harmless: ${harmless}</span><span>undetected: ${undet}</span>`;
+async function loadVtRows() {
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "GET_VT_RESULTS" });
+    const wanted = relevantIndicators(latest.state);
+    vtRows = ((resp && resp.results) || []).filter((r) => wanted.has(r.indicator));
+  } catch (e) {
+    vtRows = [];
+  }
+  render();
 }
 
-document.getElementById("vtScanBtn").addEventListener("click", async () => {
-  const btn = document.getElementById("vtScanBtn");
-  const resultsEl = document.getElementById("vtResults");
-  btn.disabled = true;
-  btn.textContent = "Scanning (rate-limited, may take a bit)...";
-  resultsEl.innerHTML = "";
+// ---------- buttons ----------
+$("scanBtn").addEventListener("click", async () => {
+  busy.scan = true; notice = null; render();
+  let ok = false;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "LAYER1_SCAN_NOW", tabId });
+    ok = !!(resp && resp.ok);
+  } catch (e) {}
+  busy.scan = false;
+  if (!ok) notice = { text: "JackTrap can’t read this page yet. Reload it once and scan again. Browser pages such as chrome:// can’t be scanned." };
+  open.add("static");
+  await refreshState();
+});
 
-  const tab = await getActiveTab();
-  chrome.runtime.sendMessage({ type: "SCAN_VT", tabId: tab.id }, (resp) => {
-    btn.disabled = false;
-    btn.textContent = "Check top hosts / IPs with VirusTotal";
-
+$("vtBtn").addEventListener("click", async () => {
+  busy.vt = true; notice = null; render();
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "SCAN_VT", tabId });
     if (!resp || resp.error === "no_state") {
-      resultsEl.innerHTML = '<div class="empty">No data for this tab yet.</div>';
-      return;
+      notice = { text: "No data for this tab yet. Reload the page and try again." };
+    } else {
+      const all = [...(resp.domainResults || []), ...(resp.ipResults || [])];
+      if (all.some((r) => r && r.error === "no_api_key")) {
+        notice = { text: "Add a VirusTotal API key in settings to use this check.", settings: true };
+      }
     }
-    const { domainResults = [], ipResults = [] } = resp;
-    const noKey = [...domainResults, ...ipResults].some(r => r?.error === "no_api_key");
-    if (noKey) {
-      resultsEl.innerHTML = '<div class="empty">No VirusTotal API key set. Add one on the <a href="#" id="openOptions">options page</a>.</div>';
-      document.getElementById("openOptions")?.addEventListener("click", (e) => {
-        e.preventDefault();
-        chrome.runtime.openOptionsPage();
-      });
-      return;
-    }
-
-    const rows = [...domainResults, ...ipResults].map(r => {
-      if (!r) return "";
-      if (r.error) return `<div class="vt-item">${r.indicator || ""} — lookup error (${r.error})</div>`;
-      if (r.notFound) return `<div class="vt-item">${r.indicator} — not in VirusTotal dataset</div>`;
-      return `<div class="vt-item"><strong>${r.indicator}</strong> (${r.type})<br/><span class="vt-stats">${renderVtStats(r.stats)}</span></div>`;
-    }).join("");
-    resultsEl.innerHTML = rows || '<div class="empty">No hosts to check.</div>';
-  });
+  } catch (e) {
+    notice = { text: "The VirusTotal check failed. Try again in a minute." };
+  }
+  busy.vt = false;
+  open.add("vt");
+  await refreshState();
+  await loadVtRows();
 });
 
-document.getElementById("openDashboardBtn").addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
-});
+$("settingsBtn").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("dashBtn").addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }));
 
-refresh();
-refreshSystemUsage();
-setInterval(refresh, 3000);
-setInterval(refreshSystemUsage, 3000);
+// ---------- start ----------
+(async function start() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  tabId = tab ? tab.id : null;
+  render();
+  await refreshState();
+  await loadVtRows();
+  refreshSystem();
+  setInterval(refreshState, 3000);
+  setInterval(refreshSystem, 3000);
+})();

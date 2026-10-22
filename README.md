@@ -97,3 +97,35 @@ at the bottom of the popup to open `dashboard.html` in its own browser tab, whic
 - This is a detection *aid*, not a guarantee — false positives (e.g. a
   legitimate site that happens to use WASM/Workers heavily) and false
   negatives (well-obfuscated miners) are both possible.
+
+
+## Layer 1: static JavaScript scanner
+
+Reads a page's JavaScript for words miners use, without running it.
+Files: `layer1.js` (the scanner), `signatures.js` (the word list),
+`layer1_scan.js` (collects scripts inside the page), `settings.js`.
+
+- **Always (cheap):** inline `<script>` code and script file addresses are scanned when the page loads. Scripts added in the first minute are scanned too.
+- **Only when busy (heavier):** external script files are downloaded (cache first, 300 KB max each, no cookies) and scanned when system CPU is at or above the level set on the settings page, or when you press **Scan this page now**.
+- **Strength:** strong words (coinhive, cryptonight, miner.start(, xmrig...) earn the most points. Possible words (WebAssembly.instantiate, stratum, hashrate) earn a little. Weak words (worker, wallet, pool) count only next to a stronger word.
+- **Points:** a strong sign adds 15 + 7 per strong word (+3 per possible word) to the 0-100 score, capped at 50. Possible words alone add at most 12.
+- **Limits:** obfuscated code (`"coin" + "hive"`) is missed, and only the top frame of a page is read.
+
+## Development
+
+```bash
+npm ci
+npm run lint
+npm test
+```
+
+Load the `extension/` folder with **Load unpacked** in `chrome://extensions`.
+To try the scanner: `cd test-pages && python3 -m http.server 8000`, then open
+`http://localhost:8000/fake-miner.html`, `external.html` and `obfuscated.html`.
+
+Branches: `main` (stable) <- `dev` <- `feature/*`, merged by Pull Request.
+CI runs lint and tests on every push. Pushing a tag like `v0.2-mid1` builds the
+extension zip and attaches it to a GitHub Release.
+
+The VirusTotal key is entered on the settings page and stored in the browser.
+Never put it in code or commit it.
