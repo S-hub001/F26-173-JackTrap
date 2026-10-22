@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS = {
   fetchExternal: true,     // read external script files, not just inline code
   deepScanCpu: 30,         // ...but only when system CPU is at least this %
   sampleMinutes: 5,        // how often the background checks system CPU
+  layer2Precise: false,    // Layer 2: measure the active tab's process with the debugger
   disabledKeywords: [],
   customSignatures: []
 };
@@ -17,6 +18,7 @@ function normalizeSettings(raw) {
   const s = Object.assign({}, DEFAULT_SETTINGS, raw && typeof raw === 'object' ? raw : {});
   s.layer1Enabled = s.layer1Enabled !== false;
   s.fetchExternal = s.fetchExternal !== false;
+  s.layer2Precise = s.layer2Precise === true;
   s.sampleMinutes = SAMPLE_MINUTE_CHOICES.includes(Number(s.sampleMinutes)) ? Number(s.sampleMinutes) : DEFAULT_SETTINGS.sampleMinutes;
   s.deepScanCpu = DEEP_CPU_CHOICES.includes(Number(s.deepScanCpu)) ? Number(s.deepScanCpu) : DEFAULT_SETTINGS.deepScanCpu;
   s.disabledKeywords = Array.isArray(s.disabledKeywords) ? s.disabledKeywords.filter((k) => typeof k === 'string').slice(0, 100) : [];

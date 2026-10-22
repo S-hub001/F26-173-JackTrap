@@ -1,6 +1,6 @@
 # JackTrap (Chrome MV3)
 
-A minimal browser extension that watches for cryptojacking-style behavior per
+A browser extension that watches for cryptojacking-style behavior per
 open site, and cross-checks the domains/IPs it sees against VirusTotal.
 
 ## What it actually does (and doesn't)

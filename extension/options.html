@@ -24,6 +24,7 @@
       <a href="#detection">Detection</a>
       <a href="#static">Static scanner</a>
       <a href="#signatures">Signatures</a>
+      <a href="#dynamic">Dynamic behavior</a>
       <a href="#virustotal">VirusTotal</a>
       <a href="#limits">What JackTrap can’t see</a>
       <a href="#data">Data</a>
@@ -98,6 +99,19 @@
         </form>
       </section>
 
+      <section id="dynamic">
+        <h2>Dynamic behavior <span class="tag">Layer 2</span></h2>
+        <p class="lead">Watches what a page does to your browser: event loop delay, main-thread load, workers, memory and CPU. The in-page numbers are always on and very light.</p>
+        <div class="row">
+          <div class="what">
+            <label for="layer2Precise">Precise per-tab measurement</label>
+            <p class="help">Reads the CPU and memory of the tab’s own process with Chrome’s debugger, in short 8-second bursts. While it runs, Chrome shows a bar saying JackTrap is debugging the browser. Chrome will ask your permission when you turn this on.</p>
+          </div>
+          <span class="switch"><input type="checkbox" role="switch" id="layer2Precise" /><span></span></span>
+        </div>
+        <p class="help">With this on, JackTrap also measures the tab you are looking at every time the system check finds the CPU above the level chosen in the static scanner section. The “Measure this tab” button in the popup works any time.</p>
+      </section>
+
       <section id="virustotal">
         <h2>VirusTotal</h2>
         <p class="lead">Used by the “Check with VirusTotal” button. The key stays in this browser only and is never synced.</p>
@@ -117,8 +131,8 @@
 
       <section id="limits">
         <h2>What JackTrap can’t see</h2>
-        <p class="lead">Chrome does not let normal extensions read operating-system processes or CPU and memory for a single tab. The API that does (<code>chrome.processes</code>) is limited to extensions installed by enterprise policy, on every Chrome channel.</p>
-        <p class="lead">So CPU and memory here are whole-machine numbers, used as a hint next to the per-page signals. Going further would need a separate native app.</p>
+        <p class="lead">Chrome does not give normal extensions an operating-system view of processes, thread counts, or a GPU percentage. The one API built for per-tab CPU and memory, <code>chrome.processes</code>, is listed by Chrome’s documentation as Dev channel only.</p>
+        <p class="lead">So JackTrap measures a tab’s process with the debugger when you allow it, and reads timing, workers and memory from inside the page. Exact thread counts or GPU use would need a separate native app.</p>
         <p class="lead">Static scanning has limits too: code that hides its words (for example by splitting them into pieces) will not match.</p>
       </section>
 

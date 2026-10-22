@@ -24,7 +24,7 @@ let tabId = null;
 let latest = { state: null, cpu: null, memUsed: null, memTotal: null };
 let vtRows = [];
 let notice = null; // { text, settings }
-const busy = { scan: false, vt: false };
+const busy = { scan: false, vt: false, measure: false };
 const open = new Set();
 let autoOpened = false;
 let lastKey = "";
@@ -65,6 +65,10 @@ function explain(state) {
   if (sus.length) return "This page connects to " + sus[0].host + ":" + sus[0].port + ", which looks like a mining pool.";
   if ((t.suspiciousWorkerNames || []).length) return "A background worker has a mining-style name.";
   if ((t.websockets || []).some((w) => w.suspicious)) return "A WebSocket goes to a mining-style address.";
+  const l2 = state.layer2 || {};
+  if (l2.level === "heavy" && (l2.reasons || []).length) {
+    return "Layer 2 sees heavy activity. " + l2.reasons.slice(0, 2).join(". ") + ".";
+  }
   if (l1.level === "possible") return "Some scripts mention mining terms. Honest code does too, so check the details.";
   if ((state.score || 0) >= 30) return "Heavy scripting (WebAssembly, workers or long tasks). Normal for some apps.";
   if ((state.score || 0) > 0) return "A little scripting activity, nothing that looks like mining.";
@@ -144,26 +148,96 @@ function layerStatic(state) {
   return { id: "static", title, status, chip, summary, body };
 }
 
-function layerBehavior(state) {
+function fmtMB(n) {
+  return n ? (n / (1024 * 1024)).toFixed(1) + " MB" : "0 MB";
+}
+
+function section(title) {
+  return h("p", { class: "sub-title" }, title);
+}
+
+// Layer 2: dynamic behavior. What this one page is doing to the browser.
+function layerDynamic(state) {
   const t = (state && state.telemetry) || {};
+  const l2 = (state && state.layer2) || {};
+  const page = l2.page;
+  const proc = l2.process;
+  const cores = l2.cores || (page && page.cores) || 0;
   const susW = (t.suspiciousWorkerNames || []).length;
   const susWs = (t.websockets || []).filter((w) => w.suspicious).length;
   const wasm = t.wasmInstantiations || 0;
   const workers = t.workersCreated || 0;
   const longMs = Math.round(t.longTaskTotalMs || 0);
+
   let status = "ok", chip = "Calm";
   if (!state) { status = "idle"; chip = "No data"; }
-  else if (susW || susWs) { status = "alert"; chip = "Suspicious"; }
-  else if (wasm > 0 || workers > 2 || longMs > 3000) { status = "watch"; chip = "Busy"; }
-  const body = h("div", null,
+  else if (susW || susWs || l2.level === "heavy") { status = "alert"; chip = susW || susWs ? "Suspicious" : "Heavy"; }
+  else if (l2.level === "busy" || wasm > 0 || workers > 2 || longMs > 3000) { status = "watch"; chip = "Busy"; }
+
+  const bits = [];
+  if (proc && proc.cpuPct != null) bits.push("CPU " + Math.round(proc.cpuPct) + "%");
+  if (page && page.visible && page.loopSamples >= 5) bits.push("loop " + Math.round(page.loopLagP95Ms) + " ms");
+  if (page) bits.push(page.workersLive + " workers");
+  const summary = bits.length ? bits.join(" · ") : "WASM " + wasm + " · workers " + workers + " · blocked " + longMs + " ms";
+
+  const body = h("div", null);
+
+  // 1) measured from outside the page
+  body.append(section("This tab’s process (measured from outside)"));
+  if (proc) {
+    const rows = [
+      kv("Process CPU (of one core)", proc.cpuPct == null ? "not reported" : Math.round(proc.cpuPct) + "%"),
+      proc.cpuMachinePct != null ? kv("Share of this machine", Math.round(proc.cpuMachinePct) + "%") : null,
+      proc.mainThreadPct != null ? kv("Main thread", Math.round(proc.mainThreadPct) + "%") : null,
+      proc.otherThreadsPct != null ? kv("Workers and other threads", Math.round(proc.otherThreadsPct) + "%") : null,
+      proc.jsHeapUsed != null ? kv("JavaScript memory", fmtMB(proc.jsHeapUsed) + (proc.jsHeapTotal ? " of " + fmtMB(proc.jsHeapTotal) : "")) : null,
+      proc.privateMemory != null ? kv("Private memory", fmtMB(proc.privateMemory)) : null,
+      proc.nodes != null ? kv("Page elements (DOM nodes)", proc.nodes) : null,
+      proc.workers != null ? kv("Workers alive (Chrome’s count)", proc.workers) : null,
+      h("p", { class: "muted" }, "Measured over " + (proc.seconds != null ? proc.seconds + " seconds" : "one reading") + " using " + (proc.source === "chrome.processes" ? "chrome.processes" : "the debugger") + "." +
+        (proc.missing && proc.missing.length ? " This Chrome did not report: " + proc.missing.join(", ") + "." : "")),
+      proc.cpuPct != null && proc.cpuPct > 100 ? h("p", { class: "muted" }, "Over 100% is normal: it means more than one core is busy. Other tabs of the same site can share this process.") : null
+    ];
+    body.append(...rows.filter(Boolean));
+  } else {
+    body.append(h("p", { class: "muted" }, "Not measured yet. Press “Measure this tab” (about 8 seconds). It needs the precise-measurement option in settings."));
+  }
+
+  // 2) seen from inside the page
+  body.append(section("Seen from inside the page"));
+  if (page) {
+    if (!page.visible) body.append(h("p", { class: "muted" }, "This tab is in the background, so timing is not measured right now."));
+    body.append(
+      kv("Event loop delay (p95 / worst)", page.loopSamples >= 5 ? Math.round(page.loopLagP95Ms) + " ms / " + Math.round(page.loopLagMaxMs) + " ms" : "…"),
+      kv("Main thread blocked", Math.round(page.busyPct) + "%"),
+      kv("Frame rate", page.frameSamples ? page.fps + " fps · " + page.slowFrames + " slow" : "…"),
+      kv("JavaScript memory", fmtMB(page.heapUsed) + (page.heapLimit ? " of " + fmtMB(page.heapLimit) + " limit" : "")),
+      kv("WebAssembly memory", page.wasmMemories ? fmtMB(page.wasmMemoryBytes) + " in " + page.wasmMemories : "none seen"),
+      kv("Workers alive (peak)", page.workersLive + " (" + page.workersPeak + ")" + (cores ? " on " + cores + " cores" : "")),
+      kv("GPU contexts", "2D " + page.gpu.canvas2d + " · WebGL " + (page.gpu.webgl + page.gpu.webgl2) + " · WebGPU " + (page.gpu.webgpu + page.gpu.adapterRequests))
+    );
+  } else {
+    body.append(h("p", { class: "muted" }, "Waiting for the first reading (about 4 seconds after the page loads)."));
+  }
+
+  // 3) what the page did
+  body.append(section("What the page did"));
+  body.append(
     kv("WebAssembly starts", wasm),
     kv("Workers created", workers),
     kv("Suspicious workers", susW),
     kv("Suspicious WebSockets", susWs),
-    kv("Main thread blocked", longMs + " ms")
+    kv("Main thread blocked (total)", longMs + " ms")
   );
-  return { id: "behavior", title: "Page behavior", status, chip,
-    summary: "WASM " + wasm + " · workers " + workers + " · blocked " + longMs + " ms", body };
+
+  if (l2.reasons && l2.reasons.length) {
+    body.append(section("Why Layer 2 added +" + (l2.points || 0) + " to the score"));
+    l2.reasons.forEach((r) => body.append(h("p", { class: "reason" }, r)));
+  }
+  body.append(h("p", { class: "muted", style: "margin-top:8px" },
+    "Numbers from inside the page can be faked by a hostile page, so the measured ones are more trustworthy. Chrome gives extensions no thread count or GPU percent; live workers and GPU contexts are the closest signals."));
+
+  return { id: "behavior", title: "Layer 2 · Dynamic behavior", status, chip, summary, body };
 }
 
 function layerNetwork(state) {
@@ -231,7 +305,7 @@ function render() {
     if (notice.settings) box.append(h("button", { class: "btn", onclick: () => chrome.runtime.openOptionsPage() }, "Open settings"));
   }
 
-  const layers = [layerCpu(), layerStatic(state), layerBehavior(state), layerNetwork(state), layerVt(state)];
+  const layers = [layerCpu(), layerStatic(state), layerDynamic(state), layerNetwork(state), layerVt(state)];
   if (!autoOpened && state) {
     const firstAlert = layers.find((l) => l.status === "alert");
     if (firstAlert) open.add(firstAlert.id); // open only the first flagged layer
@@ -258,6 +332,8 @@ function render() {
 
   $("scanBtn").disabled = busy.scan || tabId == null;
   $("scanBtn").textContent = busy.scan ? "Scanning…" : "Scan this page now";
+  $("measureBtn").disabled = busy.measure || tabId == null;
+  $("measureBtn").textContent = busy.measure ? "Measuring (8 s)…" : "Measure this tab";
   $("vtBtn").disabled = busy.vt || tabId == null;
   $("vtBtn").textContent = busy.vt ? "Checking (takes a while)…" : "Check with VirusTotal";
 }
@@ -341,6 +417,24 @@ $("scanBtn").addEventListener("click", async () => {
   busy.scan = false;
   if (!ok) notice = { text: "JackTrap can’t read this page yet. Reload it once and scan again. Browser pages such as chrome:// can’t be scanned." };
   open.add("static");
+  await refreshState();
+});
+
+$("measureBtn").addEventListener("click", async () => {
+  busy.measure = true; notice = null; render();
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "LAYER2_MEASURE_NOW", tabId, seconds: 8 });
+    if (!resp || !resp.ok) {
+      const error = resp && resp.error;
+      if (error === "no_permission") notice = { text: "Turn on “Precise per-tab measurement” in settings first. Chrome will ask your permission.", settings: true };
+      else if (error === "busy") notice = { text: "A measurement is already running for this tab." };
+      else notice = { text: "JackTrap could not measure this tab. Another tool may be attached to it, or it is a browser page such as chrome://." };
+    }
+  } catch (e) {
+    notice = { text: "The measurement was interrupted. Try again." };
+  }
+  busy.measure = false;
+  open.add("behavior");
   await refreshState();
 });
 

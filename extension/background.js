@@ -264,6 +264,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async
   }
 
+  //Handles manual measurement triggers from your popup interface
+  if (msg.type === "TRIGGER_PRECISE_BURST") {
+    triggerPreciseMeasurement(msg.tabId);
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (msg.type === "GET_STATE") {
     const tabId = msg.tabId;
     const state = tabStates.get(tabId) || null;
@@ -709,6 +716,14 @@ async function sampleSystem() {
           type: "system_cpu_high",
           detail: `System-wide CPU usage hit ${systemUsage.cpuPercent}%.${hint}`
         });
+
+        // 🔥 HOOK UP PRECISE PER-TAB BURST ON ACTIVE TAB WHEN SYSTEM LOAD SPIKES
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+          if (tabs && tabs.length > 0) {
+            triggerPreciseMeasurement(tabs[0].id);
+          }
+        });
+
       }
       systemCpuWasHigh = high;
 
@@ -748,3 +763,68 @@ chrome.runtime.onInstalled.addListener(() => {
 
 applySampleAlarm();
 sampleSystem(); // seed a first reading on worker startup
+
+
+//////Precise Per-Tab Debugger Burst Implementation
+// Tracking set to prevent running overlapping sessions on the same tab
+const activeMeasurements = new Set();
+
+async function triggerPreciseMeasurement(tabId) {
+  // Guard 1: Skip if this tab is already undergoing a measurement burst
+  if (activeMeasurements.has(tabId)) return;
+
+  // Guard 2: Verify user settings state
+  const settings = await loadSettings();
+  if (!settings.layer2Precise) {
+    console.log(`[JackTrap] Precise measurement skipped: setting is turned off.`);
+    return;
+  }
+
+  // Guard 3: Stop attachment if the target tab is an internal or restricted browser page
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab || !tab.url) return;
+    const restrictedSchemes = ['chrome:', 'chrome-extension:', 'edge:', 'about:', 'view-source:', 'https://google.com'];
+    if (restrictedSchemes.some(scheme => tab.url.startsWith(scheme))) {
+      console.log(`[JackTrap] Tab ${tabId} is a protected system page. Debugger blocked.`);
+      return;
+    }
+  } catch (e) {
+    return; // Tab closed or inaccessible
+  }
+
+  console.log(`[JackTrap] Initiating precise 8-second burst on tab: ${tabId}`);
+  activeMeasurements.add(tabId);
+
+  // Attach the Debugger Engine
+  chrome.debugger.attach({ tabId: tabId }, "1.3", () => {
+    // Handle attachment rejections gracefully (e.g., DevTools already open on tab)
+    if (chrome.runtime.lastError) {
+      console.warn(`[JackTrap] Attachment failed: ${chrome.runtime.lastError.message}`);
+      activeMeasurements.delete(tabId);
+      return;
+    }
+
+    // Enable Performance tracking metrics inside the tab's render sandbox
+    chrome.debugger.sendCommand({ tabId: tabId }, "Performance.enable", {}, () => {
+      
+      // Let the debugger collect profile insights for exactly 8 seconds, then self-detach
+      setTimeout(() => {
+        stopPreciseMeasurement(tabId);
+      }, 8000);
+
+    });
+  });
+}
+
+function stopPreciseMeasurement(tabId) {
+  if (!activeMeasurements.has(tabId)) return;
+
+  chrome.debugger.detach({ tabId: tabId }, () => {
+    if (chrome.runtime.lastError) {
+      console.log(`[JackTrap] Handled silent detach cleanup.`);
+    }
+    activeMeasurements.delete(tabId);
+    console.log(`[JackTrap] Precise burst finished and cleanly detached from tab: ${tabId}`);
+  });
+}

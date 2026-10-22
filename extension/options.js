@@ -104,6 +104,21 @@ function bindControls() {
   $("deepScanCpu").addEventListener("change", (e) => update({ deepScanCpu: Number(e.target.value) }));
   $("layer1Enabled").addEventListener("change", (e) => update({ layer1Enabled: e.target.checked }));
   $("fetchExternal").addEventListener("change", (e) => update({ fetchExternal: e.target.checked }));
+
+  // Set the checkbox state when the options page loads
+  $("layer2Precise").checked = settings.layer2Precise;
+
+  $("layer2Precise").addEventListener("change", (e) => {
+    const box = e.target;
+    
+    // The permission is already granted via manifest.json.
+    // Simply update the user's setting preference.
+    update({ layer2Precise: box.checked });
+    
+    if (box.checked) {
+      toast("Precise per-tab measurement enabled");
+    }
+  });
 }
 
 // ---------- VirusTotal key ----------
@@ -145,6 +160,7 @@ function bindValues() {
   $("deepScanCpu").value = String(settings.deepScanCpu);
   $("layer1Enabled").checked = settings.layer1Enabled;
   $("fetchExternal").checked = settings.fetchExternal;
+  $("layer2Precise").checked = settings.layer2Precise;
 }
 
 (async function start() {
