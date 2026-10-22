@@ -1,50 +1,173 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>JackTrap — Settings</title>
-  <style>
-    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 560px; margin: 30px auto; color: #1a1a1a; }
-    h1 { font-size: 18px; }
-    label { display: block; font-size: 13px; font-weight: 600; margin-top: 16px; }
-    input { width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box; font-family: monospace; }
-    button { margin-top: 14px; padding: 8px 16px; background: #1565C0; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
-    p.note { font-size: 12px; color: #666; line-height: 1.5; }
-    .status { font-size: 12px; margin-top: 8px; color: #2E7D32; }
-    ul { font-size: 12px; color: #555; }
-  </style>
+  <title>JackTrap settings</title>
+  <link rel="stylesheet" href="theme.css" />
+  <link rel="stylesheet" href="options.css" />
 </head>
 <body>
-  <h1>JackTrap — Settings</h1>
+  <header class="bar">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="8" fill="#0E7C86"/>
+      <polygon points="4,5 28,5 28,12 24,18 20,12 16,18 12,12 8,18 4,12" fill="#F2F5F4"/>
+      <circle cx="16" cy="24" r="3.2" fill="#E3A008"/>
+    </svg>
+    <div>
+      <h1>JackTrap</h1>
+      <p>Settings</p>
+    </div>
+  </header>
 
-  <p class="note">
-    This extension detects cryptojacking-style behavior using signals a browser can actually
-    observe: network requests per site, WebAssembly/Worker/WebSocket usage, main-thread
-    blocking (long tasks), JS heap growth, and whole-machine CPU/memory usage (popup and
-    dashboard). All of that works in a completely normal install of Chrome — stable channel,
-    no flags, no developer build required.
-  </p>
-  <p class="note">
-    What it still can't do: read OS-level processes, get <em>per-tab or per-process</em>
-    CPU/RAM, or hash a running executable. That's not a "use a different Chrome channel"
-    problem — the API that exposes per-process detail (<code>chrome.processes</code>) is
-    restricted by Chrome to extensions that are force-installed by enterprise policy, on
-    every channel including stable. A normal unpacked or Web Store install can't get it
-    regardless. It would take a separate native application (Native Messaging) talking to
-    the OS to go further than that.
-  </p>
+  <div class="shell">
+    <nav class="side" aria-label="Settings sections">
+      <a href="#detection">Detection</a>
+      <a href="#static">Static scanner</a>
+      <a href="#signatures">Signatures</a>
+      <a href="#dynamic">Dynamic behavior</a>
+      <a href="#virustotal">VirusTotal</a>
+      <a href="#limits">What JackTrap can’t see</a>
+      <a href="#data">Data</a>
+    </nav>
 
-  <label for="apiKey">VirusTotal API key (stored locally, not synced)</label>
-  <input type="text" id="apiKey" placeholder="Paste your VirusTotal API key" />
-  <button id="save">Save</button>
-  <div class="status" id="status"></div>
+    <main>
+      <section id="detection">
+        <h2>Detection</h2>
+        <p class="lead">JackTrap checks cheap signals first and only digs deeper when something looks busy. Changes save as you make them.</p>
+        <div class="row">
+          <div class="what">
+            <label for="sampleMinutes">Check system CPU every</label>
+            <p class="help">Longer gaps keep the browser light. Five minutes is the recommended setting.</p>
+          </div>
+          <select id="sampleMinutes">
+            <option value="1">1 minute</option>
+            <option value="5">5 minutes</option>
+            <option value="10">10 minutes</option>
+            <option value="15">15 minutes</option>
+          </select>
+        </div>
+      </section>
 
-  <ul>
-    <li>Free-tier VirusTotal keys are limited to ~4 requests/minute — the extension paces lookups automatically and caches results for an hour.</li>
-    <li>Get a key at virustotal.com under your profile → API key.</li>
-    <li>Because this key was shared in a chat conversation during setup, consider rotating it in your VirusTotal account settings.</li>
-  </ul>
+      <section id="static">
+        <h2>Static scanner <span class="tag">Layer 1</span></h2>
+        <p class="lead">Reads a page’s JavaScript for words that miners use, without running anything.</p>
+        <div class="row">
+          <div class="what">
+            <label for="layer1Enabled">Scan page scripts</label>
+            <p class="help">Looks through inline scripts and script file names on every page you open.</p>
+          </div>
+          <span class="switch"><input type="checkbox" role="switch" id="layer1Enabled" /><span></span></span>
+        </div>
+        <div class="row">
+          <div class="what">
+            <label for="fetchExternal">Also read external script files</label>
+            <p class="help">JackTrap downloads each script file (usually from the browser cache) and reads up to 300 KB of it. Cookies are never sent.</p>
+          </div>
+          <span class="switch"><input type="checkbox" role="switch" id="fetchExternal" /><span></span></span>
+        </div>
+        <div class="row">
+          <div class="what">
+            <label for="deepScanCpu">Read script files when CPU is at least</label>
+            <p class="help">Keeps this heavier step for busy moments. The “Scan this page now” button always reads them.</p>
+          </div>
+          <select id="deepScanCpu">
+            <option value="0">Always</option>
+            <option value="30">30%</option>
+            <option value="60">60%</option>
+            <option value="90">90%</option>
+          </select>
+        </div>
+      </section>
 
+      <section id="signatures">
+        <h2>Signatures</h2>
+        <p class="lead">The words Layer 1 looks for. Strong words earn the most points. Weak words only count when a strong or possible word is also present.</p>
+        <div id="sigGroups"></div>
+
+        <form class="addform" id="addForm" autocomplete="off">
+          <h3>Add your own word</h3>
+          <div class="addrow">
+            <input type="text" id="newKeyword" placeholder="for example: webminepool" maxlength="60" aria-label="New signature word" />
+            <select id="newWeight" aria-label="Strength">
+              <option value="4">Strong</option>
+              <option value="2" selected>Possible</option>
+              <option value="1">Weak</option>
+            </select>
+            <button class="btn primary" type="submit">Add word</button>
+          </div>
+          <p class="help" id="addError" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="dynamic">
+        <h2>Dynamic behavior <span class="tag">Layer 2</span></h2>
+        <p class="lead">Watches what a page does to your browser: event loop delay, main-thread load, workers, memory and CPU. The in-page numbers are always on and very light.</p>
+        <div class="row">
+          <div class="what">
+            <label for="layer2Precise">Precise per-tab measurement</label>
+            <p class="help">Reads the CPU and memory of the tab’s own process with Chrome’s debugger, in short 8-second bursts. While it runs, Chrome shows a bar saying JackTrap is debugging the browser. Chrome will ask your permission when you turn this on.</p>
+          </div>
+          <span class="switch"><input type="checkbox" role="switch" id="layer2Precise" /><span></span></span>
+        </div>
+        <p class="help">With this on, JackTrap also measures the tab you are looking at every time the system check finds the CPU above the level chosen in the static scanner section. The “Measure this tab” button in the popup works any time.</p>
+      </section>
+
+      <section id="virustotal">
+        <h2>VirusTotal</h2>
+        <p class="lead">Used by the “Check with VirusTotal” button. The key stays in this browser only and is never synced.</p>
+        <div class="row stack">
+          <div class="what">
+            <label for="apiKey">API key</label>
+            <p class="help">Find it in your VirusTotal profile under “API key”. Free keys allow about 4 lookups a minute, so JackTrap spaces them out and keeps results for an hour.</p>
+          </div>
+          <div class="keyline">
+            <input type="password" id="apiKey" placeholder="Paste your VirusTotal API key" autocomplete="off" spellcheck="false" />
+            <button class="btn" type="button" id="showKey" aria-pressed="false">Show</button>
+            <button class="btn primary" type="button" id="saveKey">Save key</button>
+          </div>
+        </div>
+        <p class="warn">Never commit a key to GitHub or paste it into a chat. If one has been shared, create a new key in VirusTotal and replace it here.</p>
+      </section>
+
+      <section id="limits">
+        <h2>What JackTrap can’t see</h2>
+        <p class="lead">Chrome does not give normal extensions an operating-system view of processes, thread counts, or a GPU percentage. The one API built for per-tab CPU and memory, <code>chrome.processes</code>, is listed by Chrome’s documentation as Dev channel only.</p>
+        <p class="lead">So JackTrap measures a tab’s process with the debugger when you allow it, and reads timing, workers and memory from inside the page. Exact thread counts or GPU use would need a separate native app.</p>
+        <p class="lead">Static scanning has limits too: code that hides its words (for example by splitting them into pieces) will not match.</p>
+      </section>
+
+      <section id="data">
+        <h2>Data</h2>
+        <p class="lead">Everything JackTrap stores lives in this browser.</p>
+        <div class="row">
+          <div class="what">
+            <p class="label">Event log</p>
+            <p class="help">The timeline shown on the dashboard.</p>
+          </div>
+          <button class="btn" id="clearLog">Clear event log</button>
+        </div>
+        <div class="row">
+          <div class="what">
+            <p class="label">VirusTotal results</p>
+            <p class="help">Saved lookups, kept for an hour.</p>
+          </div>
+          <button class="btn" id="clearVt">Clear saved results</button>
+        </div>
+        <div class="row">
+          <div class="what">
+            <p class="label">Settings</p>
+            <p class="help">Puts every option on this page back to its default. Your API key stays.</p>
+          </div>
+          <button class="btn" id="resetSettings">Reset settings</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="signatures.js"></script>
+  <script src="settings.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

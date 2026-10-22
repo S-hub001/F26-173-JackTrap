@@ -1,93 +1,58 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>JackTrap</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body {
-      width: 380px; margin: 0; padding: 12px;
-      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-      font-size: 13px; color: #1a1a1a; background: #fafafa;
-    }
-    h1 { font-size: 15px; margin: 0 0 2px; }
-    .sub { color: #666; font-size: 11px; margin-bottom: 10px; word-break: break-all; }
-    .score-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-    .score-badge {
-      font-size: 22px; font-weight: 700; padding: 6px 14px; border-radius: 8px; color: #fff;
-    }
-    .score-label { font-size: 12px; color: #444; }
-    section { background: #fff; border: 1px solid #e3e3e3; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
-    section h2 { font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: .03em; color: #555; }
-    .row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
-    .muted { color: #888; }
-    .flag { color: #D32F2F; font-weight: 600; }
-    .host-list { max-height: 130px; overflow-y: auto; }
-    .host-item { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px dashed #eee; font-size: 12px; }
-    button {
-      width: 100%; padding: 8px; border: none; border-radius: 6px;
-      background: #1565C0; color: #fff; font-size: 13px; cursor: pointer; margin-top: 4px;
-    }
-    button:disabled { background: #999; cursor: default; }
-    .vt-item { font-size: 12px; padding: 4px 0; border-bottom: 1px dashed #eee; }
-    .vt-stats span { margin-right: 8px; }
-    .empty { color: #999; font-style: italic; font-size: 12px; }
-    a { color: #1565C0; }
-    .legend { display: flex; gap: 10px; font-size: 10px; color: #777; margin: -6px 0 10px; }
-    .legend span { display: flex; align-items: center; gap: 4px; }
-    .legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-    .footer-actions { margin-top: 4px; }
-    button.secondary { background: #fff; color: #1565C0; border: 1px solid #1565C0; }
-  </style>
+  <link rel="stylesheet" href="theme.css" />
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <h1>JackTrap</h1>
-  <div class="sub" id="pageHost">—</div>
+  <header class="top">
+    <!-- 1. Expanded the internal viewBox from 24x15 to 40x26 to give the icon canvas room to stretch -->
+    <svg class="logo" viewBox="0 0 40 26" width="40" height="26" aria-hidden="true" style="flex-shrink: 0; display: block;"> 
+      <!-- The inner image scales up to fill out the newly expanded 40x26 coordinate space -->
+      <image href="icons/jacktrap_ext.png" x="0" y="0" width="40" height="26" preserveAspectRatio="xMidYMid meet"/>
+    </svg>
 
-  <div class="score-wrap">
-    <div class="score-badge" id="scoreBadge">0</div>
-    <div class="score-label">Cryptojacking suspicion score (0–100), based on in-page behavior + network signals + CPU Usage + Memory Usage</div>
+    <div class="who">
+      <h1>JackTrap</h1>
+      <p class="host" id="pageHost">Loading…</p>
+    </div>
+
+    <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Open settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+    
+  </header>
+
+  <section class="verdict" id="verdict" data-tier="none" aria-live="polite">
+    <div class="verdict-row">
+      <p class="verdict-word" id="verdictWord">Checking…</p>
+      <p class="score" id="scoreText"></p>
+    </div>
+    <p class="verdict-why" id="verdictWhy"></p>
+    <div class="zonebar" role="img" id="zonebar" aria-label="Suspicion score">
+      <i class="z ok"></i><i class="z watch"></i><i class="z alert"></i>
+      <b class="marker" id="marker"></b>
+    </div>
+    <div class="zonescale" aria-hidden="true">
+      <span style="left:0">0</span><span style="left:30%">30</span><span style="left:60%">60</span><span style="left:100%">100</span>
+    </div>
+  </section>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <ol class="layers" id="layers" aria-label="Detection layers"></ol>
+
+  <div class="actions">
+    <button class="btn primary" id="scanBtn">Scan this page now</button>
+    <button class="btn" id="measureBtn">Measure this tab</button>
   </div>
-  <div class="legend">
-    <span><i style="background:#4CAF50"></i>0–29 low</span>
-    <span><i style="background:#F9A825"></i>30–59 elevated</span>
-    <span><i style="background:#D32F2F"></i>60–100 high</span>
+  <div class="actions second">
+    <button class="btn" id="vtBtn">Check with VirusTotal</button>
   </div>
-
-  <section>
-    <h2>System resources (whole machine)</h2>
-    <div class="row"><span>CPU usage</span><span id="sysCpu">—</span></div>
-    <div class="row"><span>Memory used</span><span id="sysMem">—</span></div>
-    <div class="hint" style="color:#999;font-size:11px;margin-top:2px;">Machine-wide, not per-tab </div>
-  </section>
-
-  <section>
-    <h2>Behavior signals (this page)</h2>
-    <div class="row"><span>WASM instantiations</span><span id="wasmCount">0</span></div>
-    <div class="row"><span>Workers created</span><span id="workerCount">0</span></div>
-    <div class="row"><span>Suspicious workers</span><span id="susWorkers">0</span></div>
-    <div class="row"><span>Suspicious WebSockets</span><span id="susWs">0</span></div>
-    <div class="row"><span>Long-task blocking (ms)</span><span id="longTasks">0</span></div>
-  </section>
-
-  <section>
-    <h2>Network artifacts (hosts contacted)</h2>
-    <div class="host-list" id="hostList"><div class="empty">No requests captured yet.</div></div>
-  </section>
-
-  <section>
-    <h2>Suspicious connections</h2>
-    <div id="suspiciousList"><div class="empty">None detected.</div></div>
-  </section>
-
-  <section>
-    <h2>VirusTotal signature lookup</h2>
-    <button id="vtScanBtn">Check top hosts / IPs with VirusTotal</button>
-    <div id="vtResults"></div>
-  </section>
-
-  <div class="footer-actions">
-    <button id="openDashboardBtn" class="secondary">Open full dashboard (all tabs + logs) ↗</button>
+  <div class="foot">
+    <button class="linkbtn" id="dashBtn">Open dashboard</button>
   </div>
 
   <script src="popup.js"></script>

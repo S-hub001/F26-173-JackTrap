@@ -1,0 +1,19 @@
+{
+  "name": "jacktrap",
+  "version": "1.1.0",
+  "private": true,
+  "description": "JackTrap - layered cryptojacking detection Chrome extension",
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "jest": {
+    "testPathIgnorePatterns": ["/node_modules/"]
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  }
+}

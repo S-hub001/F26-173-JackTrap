@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>FAKE miner (safe simulation)</title></head>
+<body>
+  <h1>FAKE miner page</h1>
+  <p>This page does NOT mine anything. It only contains miner-like words, and it can
+     keep your CPU busy for 20 seconds so you can demo JackTrap safely.</p>
+  <button id="burn">Burn CPU for 20 seconds</button>
+
+  <script>
+    // SAFE SIMULATION: only words inside a text object.
+    var fakeConfig = {
+      library: "coinhive",
+      algorithm: "cryptonight",
+      server: "stratum+tcp://example.invalid:3333",
+      start: "miner.start()",
+      pool: "demo-pool"
+    };
+  </script>
+  <script>
+    // Busy loop in Web Workers for 20 seconds. No network, no mining.
+    document.getElementById('burn').addEventListener('click', function () {
+      var code = 'var end = Date.now() + 20000; while (Date.now() < end) {}';
+      var url = URL.createObjectURL(new Blob([code]));
+      var count = navigator.hardwareConcurrency || 4;
+      for (var i = 0; i < count; i++) { new Worker(url); }
+    });
+  </script>
+</body></html>

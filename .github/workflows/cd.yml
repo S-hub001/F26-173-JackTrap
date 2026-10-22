@@ -1,0 +1,28 @@
+name: CD
+
+# Runs when a version tag is pushed, for example v0.2-mid1
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build the extension zip
+        run: cd extension && zip -r ../jacktrap-${{ github.ref_name }}.zip .
+      - name: Publish a GitHub Release with the zip
+        uses: softprops/action-gh-release@v2
+        with:
+          files: jacktrap-${{ github.ref_name }}.zip
