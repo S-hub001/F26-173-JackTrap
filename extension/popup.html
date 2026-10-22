@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>JackTrap</title>
+  <link rel="stylesheet" href="theme.css" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="top">
+    <!-- 1. Expanded the internal viewBox from 24x15 to 40x26 to give the icon canvas room to stretch -->
+    <svg class="logo" viewBox="0 0 40 26" width="40" height="26" aria-hidden="true" style="flex-shrink: 0; display: block;"> 
+      <!-- The inner image scales up to fill out the newly expanded 40x26 coordinate space -->
+      <image href="icons/jacktrap_ext.png" x="0" y="0" width="40" height="26" preserveAspectRatio="xMidYMid meet"/>
+    </svg>
+
+    <div class="who">
+      <h1>JackTrap</h1>
+      <p class="host" id="pageHost">Loading…</p>
+    </div>
+
+    <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Open settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+    
+  </header>
+
+  <section class="verdict" id="verdict" data-tier="none" aria-live="polite">
+    <div class="verdict-row">
+      <p class="verdict-word" id="verdictWord">Checking…</p>
+      <p class="score" id="scoreText"></p>
+    </div>
+    <p class="verdict-why" id="verdictWhy"></p>
+    <div class="zonebar" role="img" id="zonebar" aria-label="Suspicion score">
+      <i class="z ok"></i><i class="z watch"></i><i class="z alert"></i>
+      <b class="marker" id="marker"></b>
+    </div>
+    <div class="zonescale" aria-hidden="true">
+      <span style="left:0">0</span><span style="left:30%">30</span><span style="left:60%">60</span><span style="left:100%">100</span>
+    </div>
+  </section>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <ol class="layers" id="layers" aria-label="Detection layers"></ol>
+
+  <div class="actions">
+    <button class="btn primary" id="scanBtn">Scan this page now</button>
+    <button class="btn" id="measureBtn">Measure this tab</button>
+  </div>
+  <div class="actions second">
+    <button class="btn" id="vtBtn">Check with VirusTotal</button>
+  </div>
+  <div class="foot">
+    <button class="linkbtn" id="dashBtn">Open dashboard</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
