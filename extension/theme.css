@@ -1,0 +1,102 @@
+/* JackTrap design tokens + shared pieces (popup and settings page).
+   Palette: deep teal ink for chrome, a cool paper background, and three
+   signal colors that always come with a word, never color alone. */
+:root {
+  color-scheme: light dark;
+  --paper: #F2F5F4;
+  --card: #FFFFFF;
+  --line: #D9E1DF;
+  --ink: #16262B;
+  --muted: #586C70;
+  --brand: #0D3B47;
+  --on-brand: #F2F5F4;
+  --on-brand-muted: #A9C3C8;
+  --accent: #0E7C86;
+  --accent-bg: #DDEFF1;
+  --btn-bg: #0D3B47;
+  --btn-fg: #F2F5F4;
+  --ok: #17754A;
+  --ok-bg: #E2F3EA;
+  --watch: #8A5200;
+  --watch-bg: #FFF0D2;
+  --watch-fill: #E3A008;
+  --alert: #B3262F;
+  --alert-bg: #FBE3E5;
+  --idle: #8A9A9D;
+  --r-s: 4px;
+  --r-m: 8px;
+  --r-l: 12px;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0F1B1E;
+    --card: #16272B;
+    --line: #294045;
+    --ink: #E6EFEE;
+    --muted: #9DB2B4;
+    --brand: #0A2A33;
+    --on-brand: #E6EFEE;
+    --on-brand-muted: #8FB0B6;
+    --accent: #4FB6C2;
+    --accent-bg: #183C42;
+    --btn-bg: #4FB6C2;
+    --btn-fg: #08252C;
+    --ok: #53C28B;
+    --ok-bg: #133428;
+    --watch: #F0B43C;
+    --watch-bg: #3A2D10;
+    --alert: #FF7A82;
+    --alert-bg: #3D1A1E;
+    --idle: #6F8689;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font: 13px/1.45 var(--font); color: var(--ink); background: var(--paper); }
+h1, h2, h3, p { margin: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn {
+  font: inherit; font-weight: 600; padding: 8px 12px; border-radius: var(--r-m);
+  border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-fg); }
+.btn.primary:hover { filter: brightness(1.12); }
+.btn:disabled { opacity: .55; cursor: default; filter: none; }
+.btn.quiet { background: transparent; }
+
+.chip {
+  display: inline-flex; align-items: center; font-size: 12px; font-weight: 600;
+  padding: 1px 8px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+}
+.chip.ok { background: var(--ok-bg); color: var(--ok); }
+.chip.watch { background: var(--watch-bg); color: var(--watch); }
+.chip.alert { background: var(--alert-bg); color: var(--alert); }
+.chip.idle { color: var(--muted); border-color: var(--line); }
+
+.kw {
+  font-family: var(--mono); font-size: 12px; background: var(--accent-bg); color: var(--ink);
+  padding: 1px 6px; border-radius: var(--r-s); word-break: break-all;
+}
+
+.switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: none; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; cursor: pointer; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--idle); transition: background .15s; pointer-events: none; }
+.switch span::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform .15s;
+}
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(16px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.logo { width: 28px; height: 28px; flex: none; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .switch span, .switch span::after { transition: none; }
+}
